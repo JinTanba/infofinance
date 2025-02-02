@@ -2,12 +2,12 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-remappings = [
-  "conditional-tokens-market-makers=lib/conditional_tokens_market_makers",
-  "conditional-tokens=lib/conditional_tokens_contracts"
-]
-# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
 [dependencies]
-conditional_tokens_market_makers = { git = "https://github.com/gnosis/conditional-tokens-market-makers.git", tag = "v1.8.1" }
-conditional_tokens_contracts = { git = "https://github.com/gnosis/conditional-tokens-contracts.git", tag = "v1.0.3" }
+"conditional-tokens-market-makers" = { git = "https://github.com/gnosis/conditional-tokens-market-makers.git", tag = "v1.8.1" }
+"conditional-tokens-contracts" = { git = "https://github.com/gnosis/conditional-tokens-contracts.git", tag = "v1.0.3" }
+
+remappings = [
+  "conditional-tokens-market-makers=lib/conditional-tokens-market-makers",
+  "conditional-tokens=lib/conditional-tokens-contracts"
+]
