@@ -2,5 +2,4 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-
-# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+solc_version = "0.5.17"  # Solidity 0.5 系の最新安定版などを指定
