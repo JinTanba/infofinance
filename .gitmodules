@@ -1,0 +1,3 @@
+[submodule "lib/conditional-tokens-market-makers"]
+	path = lib/conditional-tokens-market-makers
+	url = https://github.com/gnosis/conditional-tokens-market-makers
