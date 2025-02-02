@@ -3,3 +3,10 @@ src = "src"
 out = "out"
 libs = ["lib"]
 solc_version = "0.5.17"  # Solidity 0.5 系の最新安定版などを指定
+
+
+remappings = [
+  "openzeppelin-solidity=lib/openzeppelin-solidity",
+  "conditional-tokens-market-makers=lib/conditional_tokens_market_makers",
+  "conditional-tokens=lib/conditional_tokens_contracts"
+]
