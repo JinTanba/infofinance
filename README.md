@@ -64,3 +64,52 @@ $ forge --help
 $ anvil --help
 $ cast --help
 ```
+
+
+
+
+1. `prepareCondition(...)`
+   args:
+   description:
+2. `splitPosition(...)`
+   args:
+   description:
+3. `splitPosition`
+   args:
+   description:
+
+   // pragma solidity ^0.5.1;
+// import {CTHelpers} from "conditional-tokens/contracts/CTHelpers.sol";
+
+// contract Relay {
+
+//     mapping(bytes32 => uint256) public salts;
+//     mapping(bytes32 => address[]) public oracleList;
+
+//     struct EventInfo{
+//         string name;
+//         string symbol;
+//         string title;
+//         string description;
+//         address[] whitelist;
+//         bytes[] positions;
+//         string[] positionsBio;
+//         uint256 expaired;
+//     }
+
+//     struct PrepareEventParams {
+//         EventInfo info;
+//         address conditionalTokensAddress;
+//         address collateralTokenAddress;
+//         uint256 fee;
+//     }
+
+//     function prepareEvent(PrepareEventParams calldata params) external returns(bytes32 eventId) {
+//     }
+
+//     function setOracle(bytes32 eventId) external returns(bytes32 questionId) {
+//     }
+
+// }
+
+

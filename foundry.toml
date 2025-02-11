@@ -2,10 +2,14 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-solc_version = "0.5.17"  # Solidity 0.5 系の最新安定版などを指定
-
+solc_version = "0.5.17"  # Solidity 0.5 系の最新安定版
 remappings = [
-  "openzeppelin-solidity=lib/openzeppelin-solidity",
-  "conditional-tokens-market-makers=lib/conditional-tokens-market-makers",
-  "conditional-tokens=lib/conditional-tokens-contracts"
+    "openzeppelin-solidity=lib/openzeppelin-solidity",
+    "conditional-tokens-market-makers=lib/conditional-tokens-market-makers",
+    "conditional-tokens/contracts=lib/conditional-tokens-contracts/contracts",
+    "forge-std=lib/forge-std/src",
+    "@gnosis.pm/conditional-tokens-contracts=lib/conditional-tokens-contracts"
 ]
+
+[rpc_endpoints]
+local = "http://localhost:8545"
