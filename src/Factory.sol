@@ -1,13 +1,19 @@
-// SPDX-License-Identifier: MIT;
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.5.1;
 
 import { IERC20 } from "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
-import { ConditionalTokens } from "conditional-tokens/contracts/ConditionalTokens.sol";
+import { ConditionalTokens } from "./CTF.sol";
 import { CTHelpers } from "conditional-tokens/contracts/CTHelpers.sol";
 import { Create2CloneFactory } from "conditional-tokens-market-makers/contracts/Create2CloneFactory.sol";
 import { FixedProductMarketMaker, FixedProductMarketMakerData } from "./AMM.sol";
 import { ERC1155TokenReceiver } from "conditional-tokens/contracts/ERC1155/ERC1155TokenReceiver.sol";
+import { console } from "forge-std/console.sol";
+import { Strings } from 'openzeppelin-solidity/contracts/drafts/Strings.sol';
 
+/**
+ * @dev Adjusted factory compatible with the new FPMM.
+ *      Note that we have removed `oracleFee` and instead added `bondingCurveAddress`.
+ */
 contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMakerData, ERC1155TokenReceiver {
 
     event FixedProductMarketMakerCreation(
@@ -16,7 +22,8 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
         ConditionalTokens conditionalTokens,
         IERC20 collateralToken,
         bytes32[] conditionIds,
-        uint fee
+        uint fee,
+        address bondingCurveAddress
     );
 
     FixedProductMarketMaker public implementationMaster;
@@ -24,27 +31,43 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
 
     constructor() public {
         implementationMaster = new FixedProductMarketMaker();
+        console.log("----implementationMaster deployed", address(implementationMaster));
     }
 
+    /**
+     * @dev This function is called on the freshly cloned contract to set up its storage
+     *      to match the new FPMM's parameters: 
+     *      (ConditionalTokens, IERC20, bytes32[], uint, uint[], uint, uint, address, address).
+     */
     function cloneConstructor(bytes calldata consData) external {
         (
             ConditionalTokens _conditionalTokens,
             IERC20 _collateralToken,
             bytes32[] memory _conditionIds,
-            uint _fee
-        ) = abi.decode(consData, (ConditionalTokens, IERC20, bytes32[], uint));
-
+            uint _fee,
+            uint _oracleFee,
+            address _oracle,
+            address _bondingCurveAddress
+        ) = abi.decode(consData, (ConditionalTokens, IERC20, bytes32[], uint, uint, address, address));
+        console.log("1");
+        // Register ERC1155 receiver interfaces
         _supportedInterfaces[_INTERFACE_ID_ERC165] = true;
         _supportedInterfaces[
             ERC1155TokenReceiver(0).onERC1155Received.selector ^
             ERC1155TokenReceiver(0).onERC1155BatchReceived.selector
         ] = true;
-
+        console.log("3");
+        // Store data into this proxy's storage
         conditionalTokens = _conditionalTokens;
         collateralToken = _collateralToken;
         conditionIds = _conditionIds;
-
         fee = _fee;
+        oracleFee = _oracleFee;
+        oracle = _oracle;
+        bondingCurveAddress = _bondingCurveAddress;
+
+        console.log("bondingCurveAddress",bondingCurveAddress);
+        console.log("oracle", oracle);
 
         uint atomicOutcomeSlotCount = 1;
         outcomeSlotCounts = new uint[](conditionIds.length);
@@ -52,7 +75,10 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
             uint outcomeSlotCount = conditionalTokens.getOutcomeSlotCount(conditionIds[i]);
             atomicOutcomeSlotCount *= outcomeSlotCount;
             outcomeSlotCounts[i] = outcomeSlotCount;
+            console.log("outcomeSlotCount");
         }
+
+        
         require(atomicOutcomeSlotCount > 1, "conditions must be valid");
 
         collectionIds = new bytes32[][](conditionIds.length);
@@ -62,27 +88,32 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
 
     function _recordCollectionIDsForAllConditions(uint conditionsLeft, bytes32 parentCollectionId) private {
         if(conditionsLeft == 0) {
-            positionIds.push(CTHelpers.getPositionId(collateralToken, parentCollectionId));
+            uint positionId = CTHelpers.getPositionId(collateralToken, parentCollectionId);
+            positionIds.push(positionId);
             return;
         }
-
         conditionsLeft--;
 
         uint outcomeSlotCount = outcomeSlotCounts[conditionsLeft];
-
         collectionIds[conditionsLeft].push(parentCollectionId);
         for(uint i = 0; i < outcomeSlotCount; i++) {
+            bytes32 collectionId = CTHelpers.getCollectionId(
+                parentCollectionId,
+                conditionIds[conditionsLeft],
+                1 << i
+            );
+
             _recordCollectionIDsForAllConditions(
                 conditionsLeft,
-                CTHelpers.getCollectionId(
-                    parentCollectionId,
-                    conditionIds[conditionsLeft],
-                    1 << i
-                )
+                collectionId
             );
         }
     }
 
+    /**
+     * @dev If the newly cloned market maker ever receives ERC1155 from 
+     *      itself (for merges/splits), forward them back to the current funder.
+     */
     function onERC1155Received(
         address operator,
         address from,
@@ -111,48 +142,51 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
         return this.onERC1155BatchReceived.selector;
     }
 
-
+    /**
+     * @dev Creates a new FPMM clone with the given parameters, 
+     *      including initial funding. Parameters include:
+     *      saltNonce, conditionalTokens, collateralToken, conditionIds, fee,
+     *      initialFunds, distributionHint, oracleFee, oracle, and bondingCurveAddress.
+     */
     function create2FixedProductMarketMaker(
         uint saltNonce,
-        ConditionalTokens conditionalTokens,
-        IERC20 collateralToken,
-        bytes32[] calldata conditionIds,
-        uint fee,
-        uint initialFunds,
-        uint[] calldata distributionHint
+        ConditionalTokens _conditionalTokens,
+        IERC20 _collateralToken,
+        bytes32[] calldata _conditionIds,
+        uint _fee,
+        uint _oracleFee,
+        address _oracle,
+        address _bondingCurveAddress
     )
         external
         returns (FixedProductMarketMaker)
     {
-
+        // Deploy clone via create2 using our new constructor data:
         FixedProductMarketMaker fixedProductMarketMaker = FixedProductMarketMaker(
-            create2Clone(address(implementationMaster), saltNonce, abi.encode(
-                conditionalTokens,
-                collateralToken,
-                conditionIds,
-                fee
-            ))
+            create2Clone(
+                address(implementationMaster),
+                saltNonce,
+                abi.encode(
+                    _conditionalTokens,
+                    _collateralToken,
+                    _conditionIds,
+                    _fee,
+                    _oracleFee,
+                    _oracle,
+                    _bondingCurveAddress
+                )
+            )
         );
-
+        // Emit creation event with new signature
         emit FixedProductMarketMakerCreation(
             msg.sender,
             fixedProductMarketMaker,
-            conditionalTokens,
-            collateralToken,
-            conditionIds,
-            fee
+            _conditionalTokens,
+            _collateralToken,
+            _conditionIds,
+            _fee,
+            _bondingCurveAddress
         );
-
-        if (initialFunds > 0) {
-            currentFunder = msg.sender;
-            collateralToken.transferFrom(msg.sender, address(this), initialFunds);
-            collateralToken.approve(address(fixedProductMarketMaker), initialFunds);
-            fixedProductMarketMaker.addFunding(initialFunds, distributionHint);
-            fixedProductMarketMaker.transfer(msg.sender, fixedProductMarketMaker.balanceOf(address(this)));
-            currentFunder = address(0);
-        }
-
         return fixedProductMarketMaker;
     }
 }
-

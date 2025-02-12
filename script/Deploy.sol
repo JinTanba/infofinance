@@ -44,7 +44,7 @@ contract DeployCTF {
     function run() public returns (address) {
         // 1) Prank as the deployer
         Vm vm = Vm(address(bytes20(uint160(uint256(keccak256("hevm cheat code"))))));
-        vm.startPrank(0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266);
+        vm.
 
         // 2) Deploy all core contracts
         ctf = new ConditionalTokens();

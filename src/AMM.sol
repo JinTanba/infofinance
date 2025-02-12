@@ -1,309 +1,453 @@
 pragma solidity ^0.5.1;
 
-import {SafeMath} from 'openzeppelin-solidity/contracts/math/SafeMath.sol';
-import {IERC20} from 'openzeppelin-solidity/contracts/token/ERC20/IERC20.sol';
-import {ConditionalTokens} from 'conditional-tokens/contracts/ConditionalTokens.sol';
-import {CTHelpers} from 'conditional-tokens/contracts/CTHelpers.sol';
-import {ERC1155TokenReceiver} from 'conditional-tokens/contracts/ERC1155/ERC1155TokenReceiver.sol';
-import {ERC20} from 'openzeppelin-solidity/contracts/token/ERC20/ERC20.sol';
-
+import { SafeMath } from "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import { IERC20 } from "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
+import { ConditionalTokens } from "./CTF.sol";
+import { ERC1155TokenReceiver } from "@gnosis.pm/conditional-tokens-contracts/contracts/ERC1155/ERC1155TokenReceiver.sol";
+import { ERC20 } from "openzeppelin-solidity/contracts/token/ERC20/ERC20.sol";
+import { BondingCurve } from "./BondingCurve.sol";
+import { console } from "forge-std/console.sol";
+import { Strings } from "openzeppelin-solidity/contracts/drafts/Strings.sol";
+/**
+ * @title CeilDiv
+ * @dev Library for computing division and rounding up.
+ */
 library CeilDiv {
-  // calculates ceil(x/y)
-  function ceildiv(uint x, uint y) internal pure returns (uint) {
-    if (x > 0) return ((x - 1) / y) + 1;
-    return x / y;
-  }
+    /**
+     * @notice Calculates ceil(x / y).
+     * @param x Numerator.
+     * @param y Denominator.
+     * @return The result of x / y, rounded up.
+     */
+    function ceildiv(uint x, uint y) internal pure returns (uint) {
+        if (x > 0) return ((x - 1) / y) + 1;
+        return x / y;
+    }
 }
 
+/**
+ * @title FixedProductMarketMaker
+ * @dev A fixed product market maker contract using ERC20-style shares and conditional tokens.
+ */
 contract FixedProductMarketMaker is ERC20, ERC1155TokenReceiver {
-  event FPMMFundingAdded(address indexed funder, uint[] amountsAdded, uint sharesMinted);
-  event FPMMFundingRemoved(address indexed funder, uint[] amountsRemoved, uint collateralRemovedFromFeePool, uint sharesBurnt);
-  event FPMMBuy(address indexed buyer, uint investmentAmount, uint feeAmount, uint indexed outcomeIndex, uint outcomeTokensBought);
-  event FPMMSell(address indexed seller, uint returnAmount, uint feeAmount, uint indexed outcomeIndex, uint outcomeTokensSold);
+    using SafeMath for uint;
+    using CeilDiv for uint;
 
-  using SafeMath for uint;
-  using CeilDiv for uint;
+    uint constant ONE = 10**18;
 
-  uint constant ONE = 10 ** 18;
+    ConditionalTokens public conditionalTokens;
+    IERC20 public collateralToken;
+    bytes32[] public conditionIds;
 
-  ConditionalTokens public conditionalTokens;
-  IERC20 public collateralToken;
-  bytes32[] public conditionIds;
-  uint public fee;
-  uint internal feePoolWeight;
+    // Trading fee fraction in 1e18 units (e.g., 5e16 = 5%)
+    uint public fee;
 
-  uint[] outcomeSlotCounts;
-  bytes32[][] collectionIds;
-  uint[] positionIds;
-  mapping(address => uint256) withdrawnFees;
-  uint internal totalWithdrawnFees;
+    // Accumulates *all* fee collateral from trades
+    uint internal feePoolWeight;
 
-  function getPoolBalances() private view returns (uint[] memory) {
-    address[] memory thises = new address[](positionIds.length);
-    for (uint i = 0; i < positionIds.length; i++) {
-      thises[i] = address(this);
-    }
-    return conditionalTokens.balanceOfBatch(thises, positionIds);
-  }
+    // [ADDED] Oracle-related variables
+    address public oracle;      // address allowed to claim oracleFee
+    uint public oracleFee;      // fraction (in 1e18) of feePoolWeight the oracle can claim
+    bool public oracleFeePaid;  // tracks whether the oracle fee has been paid out
 
-  function generateBasicPartition(uint outcomeSlotCount) private pure returns (uint[] memory partition) {
-    partition = new uint[](outcomeSlotCount);
-    for (uint i = 0; i < outcomeSlotCount; i++) {
-      partition[i] = 1 << i;
-    }
-  }
+    uint[] outcomeSlotCounts;
+    bytes32[][] collectionIds;
+    uint[] positionIds;
+    address public bondingCurveAddress;
 
-  function splitPositionThroughAllConditions(uint amount) private {
-    for (uint i = conditionIds.length - 1; int(i) >= 0; i--) {
-      uint[] memory partition = generateBasicPartition(outcomeSlotCounts[i]);
-      for (uint j = 0; j < collectionIds[i].length; j++) {
-        conditionalTokens.splitPosition(collateralToken, collectionIds[i][j], conditionIds[i], partition, amount);
-      }
-    }
-  }
+    event FPMMFundingAdded(
+        address indexed funder,
+        uint[] amountsAdded,
+        uint sharesMinted
+    );
+    event FPMMFundingRemoved(
+        address indexed funder,
+        uint[] amountsRemoved,
+        uint collateralRemovedFromFeePool,
+        uint sharesBurnt
+    );
+    event FPMMBuy(
+        address indexed buyer,
+        uint investmentAmount,
+        uint feeAmount,
+        uint indexed outcomeIndex,
+        uint outcomeTokensBought
+    );
+    event FPMMSell(
+        address indexed seller,
+        uint returnAmount,
+        uint feeAmount,
+        uint indexed outcomeIndex,
+        uint outcomeTokensSold
+    );
 
-  function mergePositionsThroughAllConditions(uint amount) private {
-    for (uint i = 0; i < conditionIds.length; i++) {
-      uint[] memory partition = generateBasicPartition(outcomeSlotCounts[i]);
-      for (uint j = 0; j < collectionIds[i].length; j++) {
-        conditionalTokens.mergePositions(collateralToken, collectionIds[i][j], conditionIds[i], partition, amount);
-      }
-    }
-  }
-
-  function collectedFees() external view returns (uint) {
-    return feePoolWeight.sub(totalWithdrawnFees);
-  }
-
-  function feesWithdrawableBy(address account) public view returns (uint) {
-    uint rawAmount = feePoolWeight.mul(balanceOf(account)) / totalSupply();
-    return rawAmount.sub(withdrawnFees[account]);
-  }
-
-  function withdrawFees(address account) public {
-    uint rawAmount = feePoolWeight.mul(balanceOf(account)) / totalSupply();
-    uint withdrawableAmount = rawAmount.sub(withdrawnFees[account]);
-    if (withdrawableAmount > 0) {
-      withdrawnFees[account] = rawAmount;
-      totalWithdrawnFees = totalWithdrawnFees.add(withdrawableAmount);
-      require(collateralToken.transfer(account, withdrawableAmount), 'withdrawal transfer failed');
-    }
-  }
-
-  function _beforeTokenTransfer(address from, address to, uint256 amount) internal {
-    if (from != address(0)) {
-      withdrawFees(from);
-    }
-
-    uint totalSupply = totalSupply();
-    uint withdrawnFeesTransfer = totalSupply == 0 ? amount : feePoolWeight.mul(amount) / totalSupply;
-
-    if (from != address(0)) {
-      withdrawnFees[from] = withdrawnFees[from].sub(withdrawnFeesTransfer);
-      totalWithdrawnFees = totalWithdrawnFees.sub(withdrawnFeesTransfer);
-    } else {
-      feePoolWeight = feePoolWeight.add(withdrawnFeesTransfer);
-    }
-    if (to != address(0)) {
-      withdrawnFees[to] = withdrawnFees[to].add(withdrawnFeesTransfer);
-      totalWithdrawnFees = totalWithdrawnFees.add(withdrawnFeesTransfer);
-    } else {
-      feePoolWeight = feePoolWeight.sub(withdrawnFeesTransfer);
-    }
-  }
-
-  function addFunding(uint addedFunds, uint[] calldata distributionHint) external {
-    require(addedFunds > 0, 'funding must be non-zero');
-
-    uint[] memory sendBackAmounts = new uint[](positionIds.length);
-    uint poolShareSupply = totalSupply();
-    uint mintAmount;
-    if (poolShareSupply > 0) {
-      require(distributionHint.length == 0, 'cannot use distribution hint after initial funding');
-      uint[] memory poolBalances = getPoolBalances();
-      uint poolWeight = 0;
-      for (uint i = 0; i < poolBalances.length; i++) {
-        uint balance = poolBalances[i];
-        if (poolWeight < balance) poolWeight = balance;
-      }
-
-      for (uint i = 0; i < poolBalances.length; i++) {
-        uint remaining = addedFunds.mul(poolBalances[i]) / poolWeight;
-        sendBackAmounts[i] = addedFunds.sub(remaining);
-      }
-
-      mintAmount = addedFunds.mul(poolShareSupply) / poolWeight;
-    } else {
-      if (distributionHint.length > 0) {
-        require(distributionHint.length == positionIds.length, 'hint length off');
-        uint maxHint = 0;
-        for (uint i = 0; i < distributionHint.length; i++) {
-          uint hint = distributionHint[i];
-          if (maxHint < hint) maxHint = hint;
+    /**
+     * @notice Checks if the market is resolved by verifying that `payoutDenominator` is nonzero for all conditions.
+     * @return True if the market is resolved, false otherwise.
+     */
+    function isMarketResolved() public view returns (bool) {
+        for (uint i = 0; i < conditionIds.length; i++) {
+            if (conditionalTokens.payoutDenominator(conditionIds[i]) == 0) {
+                return false;
+            }
         }
+        return true;
+    }
 
-        for (uint i = 0; i < distributionHint.length; i++) {
-          uint remaining = addedFunds.mul(distributionHint[i]) / maxHint;
-          require(remaining > 0, 'must hint a valid distribution');
-          sendBackAmounts[i] = addedFunds.sub(remaining);
+    /**
+     * @notice Retrieves the pool's balances of each outcome token.
+     * @return An array of balances corresponding to each position.
+     */
+    function getPoolBalances() private view returns (uint[] memory) {
+        address[] memory thises = new address[](positionIds.length);
+        for (uint i = 0; i < positionIds.length; i++) {
+            thises[i] = address(this);
         }
-      }
-
-      mintAmount = addedFunds;
+        return conditionalTokens.balanceOfBatch(thises, positionIds);
     }
 
-    require(collateralToken.transferFrom(msg.sender, address(this), addedFunds), 'funding transfer failed');
-    require(collateralToken.approve(address(conditionalTokens), addedFunds), 'approval for splits failed');
-    splitPositionThroughAllConditions(addedFunds);
-
-    _mint(msg.sender, mintAmount);
-
-    conditionalTokens.safeBatchTransferFrom(address(this), msg.sender, positionIds, sendBackAmounts, '');
-
-    // transform sendBackAmounts to array of amounts added
-    for (uint i = 0; i < sendBackAmounts.length; i++) {
-      sendBackAmounts[i] = addedFunds.sub(sendBackAmounts[i]);
+    /**
+     * @notice Creates a basic partition array where each element represents a single outcome bit.
+     * @param outcomeSlotCount The number of outcomes.
+     * @return partition An array with one bit set per outcome.
+     */
+    function generateBasicPartition(uint outcomeSlotCount)
+        private
+        pure
+        returns (uint[] memory partition)
+    {
+        partition = new uint[](outcomeSlotCount);
+        for (uint i = 0; i < outcomeSlotCount; i++) {
+            partition[i] = 1 << i;
+        }
     }
 
-    emit FPMMFundingAdded(msg.sender, sendBackAmounts, mintAmount);
-  }
-
-  function removeFunding(uint sharesToBurn) external {
-    uint[] memory poolBalances = getPoolBalances();
-
-    uint[] memory sendAmounts = new uint[](poolBalances.length);
-
-    uint poolShareSupply = totalSupply();
-    for (uint i = 0; i < poolBalances.length; i++) {
-      sendAmounts[i] = poolBalances[i].mul(sharesToBurn) / poolShareSupply;
+    /**
+     * @notice Splits collateral positions for all conditions, creating outcome tokens for each condition.
+     * @param amount The amount of collateral to split.
+     */
+    function splitPositionThroughAllConditions(uint amount) private {
+        for (uint i = conditionIds.length - 1; int(i) >= 0; i--) {
+            uint[] memory partition = generateBasicPartition(outcomeSlotCounts[i]);
+            for (uint j = 0; j < collectionIds[i].length; j++) {
+                conditionalTokens.splitPosition(
+                    collateralToken,
+                    collectionIds[i][j],
+                    conditionIds[i],
+                    partition,
+                    amount
+                );
+            }
+        }
     }
 
-    uint collateralRemovedFromFeePool = collateralToken.balanceOf(address(this));
-
-    _burn(msg.sender, sharesToBurn);
-    collateralRemovedFromFeePool = collateralRemovedFromFeePool.sub(collateralToken.balanceOf(address(this)));
-
-    conditionalTokens.safeBatchTransferFrom(address(this), msg.sender, positionIds, sendAmounts, '');
-
-    emit FPMMFundingRemoved(msg.sender, sendAmounts, collateralRemovedFromFeePool, sharesToBurn);
-  }
-
-  function onERC1155Received(address operator, address from, uint256 id, uint256 value, bytes calldata data) external returns (bytes4) {
-    if (operator == address(this)) {
-      return this.onERC1155Received.selector;
+    /**
+     * @notice Merges outcome tokens for all conditions back into collateral tokens.
+     * @param amount The amount of outcome tokens to merge.
+     */
+    function mergePositionsThroughAllConditions(uint amount) private {
+        for (uint i = 0; i < conditionIds.length; i++) {
+            uint[] memory partition = generateBasicPartition(outcomeSlotCounts[i]);
+            for (uint j = 0; j < collectionIds[i].length; j++) {
+                conditionalTokens.mergePositions(
+                    collateralToken,
+                    collectionIds[i][j],
+                    conditionIds[i],
+                    partition,
+                    amount
+                );
+            }
+        }
     }
-    return 0x0;
-  }
 
-  function onERC1155BatchReceived(
-    address operator,
-    address from,
-    uint256[] calldata ids,
-    uint256[] calldata values,
-    bytes calldata data
-  ) external returns (bytes4) {
-    if (operator == address(this) && from == address(0)) {
-      return this.onERC1155BatchReceived.selector;
+    /**
+     * @notice Returns the total fees accumulated so far.
+     * @return The current value of the fee pool weight.
+     */
+    function collectedFees() external view returns (uint) {
+        return feePoolWeight;
     }
-    return 0x0;
-  }
 
-  function calcBuyAmount(uint investmentAmount, uint outcomeIndex) public view returns (uint) {
-    require(outcomeIndex < positionIds.length, 'invalid outcome index');
-
-    uint[] memory poolBalances = getPoolBalances();
-    uint investmentAmountMinusFees = investmentAmount.sub(investmentAmount.mul(fee) / ONE);
-    uint buyTokenPoolBalance = poolBalances[outcomeIndex];
-    uint endingOutcomeBalance = buyTokenPoolBalance.mul(ONE);
-    for (uint i = 0; i < poolBalances.length; i++) {
-      if (i != outcomeIndex) {
-        uint poolBalance = poolBalances[i];
-        endingOutcomeBalance = endingOutcomeBalance.mul(poolBalance).ceildiv(poolBalance.add(investmentAmountMinusFees));
-      }
+    /**
+     * @notice Internal function that pays out the oracle fee one time if the market is resolved and not yet paid.
+     */
+    function _payOracleFee() internal {
+        if (!oracleFeePaid) {
+            // Calculate the oracle's share
+            uint oracleShare = feePoolWeight.mul(oracleFee).div(ONE);
+            // Deduct from the fee pool
+            feePoolWeight = feePoolWeight.sub(oracleShare);
+            // Transfer to the oracle
+            require(collateralToken.transfer(oracle, oracleShare), "Oracle fee transfer failed");
+            // Mark as paid
+            oracleFeePaid = true;
+        }
     }
-    require(endingOutcomeBalance > 0, 'must have non-zero balances');
 
-    return buyTokenPoolBalance.add(investmentAmountMinusFees).sub(endingOutcomeBalance.ceildiv(ONE));
-  }
+    function redeemFees() external {
+        require(isMarketResolved(), "Market not resolved yet");
 
-  function calcSellAmount(uint returnAmount, uint outcomeIndex) public view returns (uint outcomeTokenSellAmount) {
-    require(outcomeIndex < positionIds.length, 'invalid outcome index');
+        _payOracleFee();
 
-    uint[] memory poolBalances = getPoolBalances();
-    uint returnAmountPlusFees = returnAmount.mul(ONE) / ONE.sub(fee);
-    uint sellTokenPoolBalance = poolBalances[outcomeIndex];
-    uint endingOutcomeBalance = sellTokenPoolBalance.mul(ONE);
-    for (uint i = 0; i < poolBalances.length; i++) {
-      if (i != outcomeIndex) {
-        uint poolBalance = poolBalances[i];
-        endingOutcomeBalance = endingOutcomeBalance.mul(poolBalance).ceildiv(poolBalance.sub(returnAmountPlusFees));
-      }
+        uint holderBalance = balanceOf(msg.sender);
+        require(holderBalance > 0, "No liquidity tokens");
+
+        uint holderShare = feePoolWeight.mul(holderBalance).div(totalSupply());
+        _burn(msg.sender, holderBalance);
+        feePoolWeight = feePoolWeight.sub(holderShare);
+
+        require(collateralToken.transfer(msg.sender, holderShare), "Fee transfer failed");
     }
-    require(endingOutcomeBalance > 0, 'must have non-zero balances');
 
-    return returnAmountPlusFees.add(endingOutcomeBalance.ceildiv(ONE)).sub(sellTokenPoolBalance);
-  }
+    /**
+     * @notice Allows a user to add collateral funding to the market maker, minting share tokens in return.
+     * @param addedFunds The amount of collateral to add.
+     */
+    function addFunding(uint addedFunds) external {
+        console.log("--------------------------------------------------------------------------------------------");
+        require(addedFunds > 0, "funding must be non-zero");
+        require(collateralToken.transferFrom(msg.sender, address(this), addedFunds), "funding transfer failed");
+        require(collateralToken.approve(address(conditionalTokens), addedFunds), "approval for splits failed");
+        console.log("0. collateralToken.approve");
+        splitPositionThroughAllConditions(addedFunds);
+        console.log("1. splitPositionThroughAllConditions");
+        uint mintedAmount = addedFunds;
+        console.log("2. mintedAmount",Strings.fromUint256(addedFunds), Strings.fromUint256(totalSupply()));
+        console.log(bondingCurveAddress);
+        console.log("oracle");
+        console.log(oracle);
+        console.log("oracleFee");
+        console.log(Strings.fromUint256(oracleFee));
+        console.log("fee");
+        console.log(Strings.fromUint256(fee));
+        console.log("collateralToken");
+        console.log(address(collateralToken));
+        uint cost = BondingCurve(bondingCurveAddress).calculateCost(addedFunds, totalSupply());
+        console.log("3. cost");
+        _mint(msg.sender, cost);
+        console.log("4. _mint");
+        console.log("--------------------------------------------------------------------------------------------");
 
-  function buy(uint investmentAmount, uint outcomeIndex, uint minOutcomeTokensToBuy) external {
-    uint outcomeTokensToBuy = calcBuyAmount(investmentAmount, outcomeIndex);
-    require(outcomeTokensToBuy >= minOutcomeTokensToBuy, 'minimum buy amount not reached');
 
-    require(collateralToken.transferFrom(msg.sender, address(this), investmentAmount), 'cost transfer failed');
+        uint[] memory sendBackAmounts = new uint[](positionIds.length);
+        emit FPMMFundingAdded(msg.sender, sendBackAmounts, mintedAmount);
+    }
 
-    uint feeAmount = investmentAmount.mul(fee) / ONE;
-    feePoolWeight = feePoolWeight.add(feeAmount);
-    uint investmentAmountMinusFees = investmentAmount.sub(feeAmount);
-    require(collateralToken.approve(address(conditionalTokens), investmentAmountMinusFees), 'approval for splits failed');
-    splitPositionThroughAllConditions(investmentAmountMinusFees);
+    /**
+     * @notice Removing funding is disabled in this contract. This function reverts on call.
+     * @param sharesToBurn The intended share tokens to burn.
+     */
+    function removeFunding(uint sharesToBurn) external {
+        revert("removeFunding disabled");
+    }
 
-    conditionalTokens.safeTransferFrom(address(this), msg.sender, positionIds[outcomeIndex], outcomeTokensToBuy, '');
+    /**
+     * @notice ERC1155 single transfer hook. Accepts transfers only if the operator is this contract. Otherwise rejects.
+     */
+    function onERC1155Received(
+        address operator,
+        address /* from */,
+        uint256 /* id */,
+        uint256 /* value */,
+        bytes calldata /* data */
+    )
+        external
+        returns (bytes4)
+    {
+        if (operator == address(this)) {
+            return this.onERC1155Received.selector;
+        }
+        return 0x0; // rejects external transfers
+    }
 
-    emit FPMMBuy(msg.sender, investmentAmount, feeAmount, outcomeIndex, outcomeTokensToBuy);
-  }
+    /**
+     * @notice ERC1155 batch transfer hook. Accepts batch transfers only if operator is this contract and from is address(0). Otherwise rejects.
+     */
+    function onERC1155BatchReceived(
+        address operator,
+        address from,
+        uint256[] calldata /* ids */,
+        uint256[] calldata /* values */,
+        bytes calldata /* data */
+    )
+        external
+        returns (bytes4)
+    {
+        if (operator == address(this) && from == address(0)) {
+            return this.onERC1155BatchReceived.selector;
+        }
+        return 0x0;
+    }
 
-  function sell(uint returnAmount, uint outcomeIndex, uint maxOutcomeTokensToSell) external {
-    uint outcomeTokensToSell = calcSellAmount(returnAmount, outcomeIndex);
-    require(outcomeTokensToSell <= maxOutcomeTokensToSell, 'maximum sell amount exceeded');
+    /**
+     * @notice Calculates how many outcome tokens can be bought with a given investment, accounting for fees.
+     * @param investmentAmount The total amount of collateral intended for the purchase.
+     * @param outcomeIndex The index of the outcome to be bought.
+     * @return The number of outcome tokens that can be purchased.
+     */
+    function calcBuyAmount(uint investmentAmount, uint outcomeIndex) public view returns (uint) {
+        require(outcomeIndex < positionIds.length, "invalid outcome index");
+        uint[] memory poolBalances = getPoolBalances();
+        uint investmentMinusFee = investmentAmount.sub(investmentAmount.mul(fee) / ONE);
 
-    conditionalTokens.safeTransferFrom(msg.sender, address(this), positionIds[outcomeIndex], outcomeTokensToSell, '');
+        uint buyTokenPoolBalance = poolBalances[outcomeIndex];
+        uint endingOutcomeBalance = buyTokenPoolBalance.mul(ONE);
 
-    uint feeAmount = returnAmount.mul(fee) / (ONE.sub(fee));
-    feePoolWeight = feePoolWeight.add(feeAmount);
-    uint returnAmountPlusFees = returnAmount.add(feeAmount);
-    mergePositionsThroughAllConditions(returnAmountPlusFees);
+        for (uint i = 0; i < poolBalances.length; i++) {
+            if (i != outcomeIndex) {
+                uint poolBalance = poolBalances[i];
+                endingOutcomeBalance = endingOutcomeBalance
+                    .mul(poolBalance)
+                    .ceildiv(poolBalance.add(investmentMinusFee));
+            }
+        }
+        require(endingOutcomeBalance > 0, "must have non-zero balances");
 
-    require(collateralToken.transfer(msg.sender, returnAmount), 'return transfer failed');
+        return buyTokenPoolBalance
+            .add(investmentMinusFee)
+            .sub(endingOutcomeBalance.ceildiv(ONE));
+    }
 
-    emit FPMMSell(msg.sender, returnAmount, feeAmount, outcomeIndex, outcomeTokensToSell);
-  }
+    /**
+     * @notice Calculates how many outcome tokens must be sold to receive a specific net amount of collateral, accounting for fees.
+     * @param returnAmount The net amount of collateral the user wants to receive.
+     * @param outcomeIndex The index of the outcome token to be sold.
+     * @return The number of outcome tokens required to be sold.
+     */
+    function calcSellAmount(uint returnAmount, uint outcomeIndex) public view returns (uint) {
+        require(outcomeIndex < positionIds.length, "invalid outcome index");
+        uint[] memory poolBalances = getPoolBalances();
+
+        uint returnAmountPlusFees = returnAmount.mul(ONE).div(ONE.sub(fee));
+        uint sellTokenPoolBalance = poolBalances[outcomeIndex];
+        uint endingOutcomeBalance = sellTokenPoolBalance.mul(ONE);
+
+        for (uint i = 0; i < poolBalances.length; i++) {
+            if (i != outcomeIndex) {
+                uint poolBalance = poolBalances[i];
+                endingOutcomeBalance = endingOutcomeBalance
+                    .mul(poolBalance)
+                    .ceildiv(poolBalance.sub(returnAmountPlusFees));
+            }
+        }
+        require(endingOutcomeBalance > 0, "must have non-zero balances");
+
+        return returnAmountPlusFees
+            .add(endingOutcomeBalance.ceildiv(ONE))
+            .sub(sellTokenPoolBalance);
+    }
+
+    /**
+     * @notice Executes the purchase of outcome tokens, deducting a fee and distributing tokens accordingly.
+     * @param investmentAmount The total collateral amount being invested.
+     * @param outcomeIndex The index of the outcome token to purchase.
+     * @param minOutcomeTokensToBuy The minimum acceptable number of outcome tokens to buy.
+     */
+    function buy(uint investmentAmount, uint outcomeIndex, uint minOutcomeTokensToBuy) external {
+        uint outcomeTokensToBuy = calcBuyAmount(investmentAmount, outcomeIndex);
+        require(outcomeTokensToBuy >= minOutcomeTokensToBuy, "minimum buy not reached");
+
+        require(collateralToken.transferFrom(msg.sender, address(this), investmentAmount), "cost transfer failed");
+
+        uint feeAmount = investmentAmount.mul(fee).div(ONE);
+        feePoolWeight = feePoolWeight.add(feeAmount);
+
+        uint investmentMinusFee = investmentAmount.sub(feeAmount);
+        require(collateralToken.approve(address(conditionalTokens), investmentMinusFee), "approval for splits failed");
+        splitPositionThroughAllConditions(investmentMinusFee);
+
+        conditionalTokens.safeTransferFrom(
+            address(this),
+            msg.sender,
+            positionIds[outcomeIndex],
+            outcomeTokensToBuy,
+            ""
+        );
+
+        emit FPMMBuy(msg.sender, investmentAmount, feeAmount, outcomeIndex, outcomeTokensToBuy);
+    }
+
+    /**
+     * @notice Executes the sale of outcome tokens for a specific net return amount, accounting for fees.
+     * @param returnAmount The amount of collateral the seller wants to receive (net of fees).
+     * @param outcomeIndex The index of the outcome token to sell.
+     * @param maxOutcomeTokensToSell The maximum outcome tokens the user is willing to sell.
+     */
+    function sell(uint returnAmount, uint outcomeIndex, uint maxOutcomeTokensToSell) external {
+        uint outcomeTokensToSell = calcSellAmount(returnAmount, outcomeIndex);
+        require(outcomeTokensToSell <= maxOutcomeTokensToSell, "maximum sell exceeded");
+
+        conditionalTokens.safeTransferFrom(
+            msg.sender,
+            address(this),
+            positionIds[outcomeIndex],
+            outcomeTokensToSell,
+            ""
+        );
+
+        uint feeAmount = returnAmount.mul(fee).div(ONE.sub(fee));
+        feePoolWeight = feePoolWeight.add(feeAmount);
+
+        uint returnAmountPlusFees = returnAmount.add(feeAmount);
+        mergePositionsThroughAllConditions(returnAmountPlusFees);
+
+        require(collateralToken.transfer(msg.sender, returnAmount), "return transfer failed");
+
+        emit FPMMSell(msg.sender, returnAmount, feeAmount, outcomeIndex, outcomeTokensToSell);
+    }
 }
 
-
-// for proxying purposes
+/**
+ * @title FixedProductMarketMakerData
+ * @dev Storage layout for proxy-based deployments of FixedProductMarketMaker.
+ */
 contract FixedProductMarketMakerData {
-  mapping(address => uint256) internal _balances;
-  mapping(address => mapping(address => uint256)) internal _allowances;
-  uint256 internal _totalSupply;
+    mapping (address => uint256) internal _balances;
+    mapping (address => mapping (address => uint256)) internal _allowances;
+    uint256 internal _totalSupply;
 
-  bytes4 internal constant _INTERFACE_ID_ERC165 = 0x01ffc9a7;
-  mapping(bytes4 => bool) internal _supportedInterfaces;
+    bytes4 internal constant _INTERFACE_ID_ERC165 = 0x01ffc9a7;
+    mapping(bytes4 => bool) internal _supportedInterfaces;
 
-  event FPMMFundingAdded(address indexed funder, uint[] amountsAdded, uint sharesMinted);
-  event FPMMFundingRemoved(address indexed funder, uint[] amountsRemoved, uint collateralRemovedFromFeePool, uint sharesBurnt);
-  event FPMMBuy(address indexed buyer, uint investmentAmount, uint feeAmount, uint indexed outcomeIndex, uint outcomeTokensBought);
-  event FPMMSell(address indexed seller, uint returnAmount, uint feeAmount, uint indexed outcomeIndex, uint outcomeTokensSold);
-  ConditionalTokens internal conditionalTokens;
-  IERC20 internal collateralToken;
-  bytes32[] internal conditionIds;
-  uint internal fee;
-  uint internal feePoolWeight;
+    event FPMMFundingAdded(
+        address indexed funder,
+        uint[] amountsAdded,
+        uint sharesMinted
+    );
+    event FPMMFundingRemoved(
+        address indexed funder,
+        uint[] amountsRemoved,
+        uint collateralRemovedFromFeePool,
+        uint sharesBurnt
+    );
+    event FPMMBuy(
+        address indexed buyer,
+        uint investmentAmount,
+        uint feeAmount,
+        uint indexed outcomeIndex,
+        uint outcomeTokensBought
+    );
+    event FPMMSell(
+        address indexed seller,
+        uint returnAmount,
+        uint feeAmount,
+        uint indexed outcomeIndex,
+        uint outcomeTokensSold
+    );
 
-  uint[] internal outcomeSlotCounts;
-  bytes32[][] internal collectionIds;
-  uint[] internal positionIds;
-  mapping(address => uint256) internal withdrawnFees;
-  uint internal totalWithdrawnFees;
+    ConditionalTokens internal conditionalTokens;
+    IERC20 internal collateralToken;
+    bytes32[] internal conditionIds;
+    uint internal fee;
+    uint internal feePoolWeight;
+
+    uint[] internal outcomeSlotCounts;
+    bytes32[][] internal collectionIds;
+    uint[] internal positionIds;
+    address internal bondingCurveAddress;
+
+    // Oracle fields
+    address internal oracle;
+    uint internal oracleFee;
+    bool internal oracleFeePaid;
 }
-
-
-
