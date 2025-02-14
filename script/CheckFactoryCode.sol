@@ -36,24 +36,24 @@ contract CheckFactory {
 
         // Deploy contracts
         ctf = new ConditionalTokens();
-        console.log("ConditionalTokens deployed at", address(ctf));
+        
 
         factory = new FPMMDeterministicFactory();
-        console.log("FPMMDeterministicFactory deployed at", address(factory));
+        
 
         collateral = new ERC20Mintable();
         collateral.mint(msg.sender, 1e24);
-        console.log("ERC20Mintable (collateral) deployed at", address(collateral));
+        
 
         bondingCurve = new BondingCurve();
-        console.log("BondingCurve deployed at", address(bondingCurve));
+        
 
         resolver = new Resolver(
             address(ctf),
             address(factory),
             address(bondingCurve)
         );
-        console.log("Resolver deployed at", address(resolver));
+        
     }
 
     function createMarket() internal {
@@ -77,19 +77,19 @@ contract CheckFactory {
             address(collateral),
             params.deadline
         );
-        console.log("Market prepared: marketId =", bytes32ToString(marketId));
+        
     }
 
     function setupOracle() internal returns (address) {
-        console.log("\nCalling resolver.setOracle(...) => should deploy minimal proxy FPMM...");
+        
         uint256 oracleFee = 1000;
         address newFPMMAddr = resolver.setOracle(1, oracleFee);
-        console.log("FPMM (proxy) deployed at", newFPMMAddr);
+        
         return newFPMMAddr;
     }
 
     function initializeFPMM(address newFPMMAddr) internal {
-        console.log("Manually calling cloneConstructor on the new FPMM clone...");
+        
 
         bytes32 questionId = resolver.getQuestionId(1, address(this));
         bytes32 conditionId = resolver.getConditionId(1, address(this));
@@ -111,7 +111,7 @@ contract CheckFactory {
         );
         require(success, "cloneConstructor call on FPMM clone failed");
         
-        console.log("Successfully initialized FPMM proxy storage.");
+        
     }
 
     function verifyFPMM(address newFPMMAddr) internal {
@@ -142,7 +142,7 @@ contract CheckFactory {
             "FPMM: bondingCurveAddress mismatch"
         );
 
-        console.log("All FPMM checks passed! The new clone is correctly initialized.");
+        
     }
 
     // Helper struct to group market parameters

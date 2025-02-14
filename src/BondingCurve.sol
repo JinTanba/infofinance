@@ -19,8 +19,8 @@ contract BondingCurve {
         view
         returns (uint cost)
     {
-        console.log("calculateCost");
+        
         cost = increase;
-        console.log("cost");
+        
     }
 }

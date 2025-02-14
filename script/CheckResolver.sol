@@ -63,18 +63,18 @@ contract CheckResolver {
         // 2) Deploy core contracts
         // ---------------------------------
         ctf = new ConditionalTokens();
-        console.log("ConditionalTokens deployed at:", address(ctf));
+        
 
         factory = new FPMMDeterministicFactory();
-        console.log("FPMMDeterministicFactory deployed at:", address(factory));
+        
 
         collateralToken = new ERC20Mintable();
         // Mint some collateral to the deployer
         collateralToken.mint(deployer, 100_000_000_0000 ether);
-        console.log("ERC20 collateral minted to deployer at:", address(collateralToken));
+        
 
         bondingCurve = new BondingCurve();
-        console.log("BondingCurve deployed at:", address(bondingCurve));
+        
 
         // ---------------------------------
         // 3) Deploy the updated Resolver
@@ -84,7 +84,7 @@ contract CheckResolver {
             address(factory),
             address(bondingCurve)
         );
-        console.log("Resolver deployed at:", address(resolver));
+        
 
         // ---------------------------------
         // 4) Create a new market
@@ -116,8 +116,8 @@ contract CheckResolver {
             );
 
             universalMarketId = oldUniversalId + 1;
-            console.log("Market prepared with universalMarketId =", universalMarketId);
-            console.logBytes32(marketId);
+            
+            
         }
 
         // ---------------------------------
@@ -136,15 +136,15 @@ contract CheckResolver {
             questionId = resolver.getQuestionId(universalMarketId, address(deployer));
             conditionId = resolver.getConditionId(universalMarketId, address(deployer));
 
-            console.log("Oracle set. FPMM deployed at:", fpmmAddress);
+            
             FixedProductMarketMaker fpmm = FixedProductMarketMaker(fpmmAddress);
 
             // If your FPMM has a function to expose the BondingCurve address:
             address bc = fpmm.bondingCurveAddress();
-            console.log("--------BondingCurve address in FPMM:", bc);
+            
 
-            console.logBytes32(questionId);
-            console.logBytes32(conditionId);
+            
+            
         }
 
         // ---------------------------------
@@ -164,7 +164,7 @@ contract CheckResolver {
             // IMPORTANT: pass both parameters: addedFunds and distributionHint
             FixedProductMarketMaker(fpmmAddress).addFunding(1000 ether);
 
-            console.log("Funding added to FPMM with total 1000 tokens.");
+            
         }
 
         // vm.stopBroadcast();

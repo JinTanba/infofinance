@@ -31,7 +31,7 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
 
     constructor() public {
         implementationMaster = new FixedProductMarketMaker();
-        console.log("----implementationMaster deployed", address(implementationMaster));
+        
     }
 
     /**
@@ -49,14 +49,14 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
             address _oracle,
             address _bondingCurveAddress
         ) = abi.decode(consData, (ConditionalTokens, IERC20, bytes32[], uint, uint, address, address));
-        console.log("1");
+        
         // Register ERC1155 receiver interfaces
         _supportedInterfaces[_INTERFACE_ID_ERC165] = true;
         _supportedInterfaces[
             ERC1155TokenReceiver(0).onERC1155Received.selector ^
             ERC1155TokenReceiver(0).onERC1155BatchReceived.selector
         ] = true;
-        console.log("3");
+        
         // Store data into this proxy's storage
         conditionalTokens = _conditionalTokens;
         collateralToken = _collateralToken;
@@ -66,8 +66,8 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
         oracle = _oracle;
         bondingCurveAddress = _bondingCurveAddress;
 
-        console.log("bondingCurveAddress",bondingCurveAddress);
-        console.log("oracle", oracle);
+        
+        
 
         uint atomicOutcomeSlotCount = 1;
         outcomeSlotCounts = new uint[](conditionIds.length);
@@ -75,7 +75,7 @@ contract FPMMDeterministicFactory is Create2CloneFactory, FixedProductMarketMake
             uint outcomeSlotCount = conditionalTokens.getOutcomeSlotCount(conditionIds[i]);
             atomicOutcomeSlotCount *= outcomeSlotCount;
             outcomeSlotCounts[i] = outcomeSlotCount;
-            console.log("outcomeSlotCount");
+            
         }
 
         

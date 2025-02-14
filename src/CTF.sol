@@ -65,8 +65,8 @@ contract ConditionalTokens is ERC1155 {
     /// @param outcomeSlotCount The number of outcome slots which should be used for this condition. Must not exceed 256.
     function prepareCondition(address oracle, bytes32 questionId, uint outcomeSlotCount) external {
         // Limit of 256 because we use a partition array that is a number of 256 bits.
-        console.log("outcomeSlotCount-----------");
-        console.log(outcomeSlotCount);
+        
+        
         require(outcomeSlotCount <= 256, "too many outcome slots");
         require(outcomeSlotCount > 1, "there should be more than one outcome slot");
         bytes32 conditionId = CTHelpers.getConditionId(oracle, questionId, outcomeSlotCount);

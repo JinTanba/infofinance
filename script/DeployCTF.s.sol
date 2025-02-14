@@ -48,25 +48,25 @@ contract DeployCTF {
 
         // 2) Deploy all core contracts
         ctf = new ConditionalTokens();
-        console.log("ConditionalTokens deployed at:", address(ctf));
+        
 
         factory = new FPMMDeterministicFactory();
-        console.log("FPMMDeterministicFactory deployed at:", address(factory));
+        
 
         collateralToken = new ERC20Mintable();
         // Mint a large supply to our deployer
         collateralToken.mint(msg.sender, 100_000_000_0000 ether);
-        console.log("ERC20 collateral minted to deployer at:", address(collateralToken));
+        
 
         bondingCurve = new BondingCurve();
-        console.log("BondingCurve deployed at:", address(bondingCurve));
+        
 
         resolver = new Resolver(
             address(ctf),
             address(factory),
             address(bondingCurve)
         );
-        console.log("Resolver deployed at:", address(resolver));
+        
 
         // 3) Prepare a new market
         {
@@ -93,23 +93,23 @@ contract DeployCTF {
         }
         // The first market is universalId = 1
         universalMarketId = 1;
-        console.log("Created new market. universalMarketId =", universalMarketId);
-        console.logBytes32(marketId);
+        
+        
 
         // 4) Set the Oracle (deploys FPMM)
         {
             uint256 oracleFee = 1000;
             fpmmAddress = resolver.setOracle(universalMarketId, oracleFee);
-            console.log("FPMM deployed at:", fpmmAddress);
+            
         }
 
         questionId = resolver.getQuestionId(universalMarketId, address(this));
-        console.log("questionId:");
-        console.logBytes32(questionId);
+        
+        
 
         conditionId = resolver.getConditionId(universalMarketId, address(this));
-        console.log("conditionId:");
-        console.logBytes32(conditionId);
+        
+        
         // create2FixedProductMarketMaker
         
         factory.create2FixedProductMarketMaker()

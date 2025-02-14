@@ -204,29 +204,29 @@ contract FixedProductMarketMaker is ERC20, ERC1155TokenReceiver {
      * @param addedFunds The amount of collateral to add.
      */
     function addFunding(uint addedFunds) external {
-        console.log("--------------------------------------------------------------------------------------------");
+        
         require(addedFunds > 0, "funding must be non-zero");
         require(collateralToken.transferFrom(msg.sender, address(this), addedFunds), "funding transfer failed");
         require(collateralToken.approve(address(conditionalTokens), addedFunds), "approval for splits failed");
-        console.log("0. collateralToken.approve");
+        
         splitPositionThroughAllConditions(addedFunds);
-        console.log("1. splitPositionThroughAllConditions");
+        
         uint mintedAmount = addedFunds;
-        console.log("2. mintedAmount",Strings.fromUint256(addedFunds), Strings.fromUint256(totalSupply()));
-        console.log(bondingCurveAddress);
-        console.log("oracle");
-        console.log(oracle);
-        console.log("oracleFee");
-        console.log(Strings.fromUint256(oracleFee));
-        console.log("fee");
-        console.log(Strings.fromUint256(fee));
-        console.log("collateralToken");
-        console.log(address(collateralToken));
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         uint cost = BondingCurve(bondingCurveAddress).calculateCost(addedFunds, totalSupply());
-        console.log("3. cost");
+        
         _mint(msg.sender, cost);
-        console.log("4. _mint");
-        console.log("--------------------------------------------------------------------------------------------");
+        
+        
 
 
         uint[] memory sendBackAmounts = new uint[](positionIds.length);
